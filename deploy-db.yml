@@ -1,0 +1,147 @@
+---
+- name: Deploy PostgreSQL on OpenShift
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    namespace: "mgmt-db"
+    db_user: "dbadmin"
+    db_password: "redhat123"
+    db_name: "sampledb"
+    db_storage: "1Gi"
+
+  tasks:
+    - name: Validate namespace variable
+      ansible.builtin.fail:
+        msg: "Variable 'namespace' is required."
+      when: namespace == ""
+
+    - name: Create PostgreSQL Secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postgresql
+            namespace: "{{ namespace }}"
+          type: Opaque
+          stringData:
+            POSTGRESQL_USER: "{{ db_user }}"
+            POSTGRESQL_PASSWORD: "{{ db_password }}"
+            POSTGRESQL_DATABASE: "{{ db_name }}"
+
+    - name: Create PVC for PostgreSQL
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: postgresql-data
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: "{{ db_storage }}"
+
+    - name: Create PostgreSQL Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: postgresql
+            namespace: "{{ namespace }}"
+            labels:
+              app: postgresql
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: postgresql
+            strategy:
+              type: Recreate
+            template:
+              metadata:
+                labels:
+                  app: postgresql
+              spec:
+                containers:
+                  - name: postgresql
+                    image: registry.redhat.io/rhel9/postgresql-15:latest
+                    ports:
+                      - containerPort: 5432
+                    envFrom:
+                      - secretRef:
+                          name: postgresql
+                    volumeMounts:
+                      - name: postgresql-data
+                        mountPath: /var/lib/pgsql/data
+                    resources:
+                      requests:
+                        cpu: 500m
+                        memory: 1Gi
+                      limits:
+                        cpu: "2"
+                        memory: 2Gi
+                    readinessProbe:
+                      exec:
+                        command:
+                          - /bin/sh
+                          - -c
+                          - psql -U $POSTGRESQL_USER -d $POSTGRESQL_DATABASE -c 'SELECT 1'
+                      initialDelaySeconds: 10
+                      periodSeconds: 10
+                    livenessProbe:
+                      exec:
+                        command:
+                          - /bin/sh
+                          - -c
+                          - psql -U $POSTGRESQL_USER -d $POSTGRESQL_DATABASE -c 'SELECT 1'
+                      initialDelaySeconds: 30
+                      periodSeconds: 30
+                volumes:
+                  - name: postgresql-data
+                    persistentVolumeClaim:
+                      claimName: postgresql-data
+
+    - name: Create PostgreSQL Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgresql
+            namespace: "{{ namespace }}"
+          spec:
+            selector:
+              app: postgresql
+            ports:
+              - port: 5432
+                targetPort: 5432
+            type: ClusterIP
+
+    - name: Wait for PostgreSQL to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: postgresql
+        namespace: "{{ namespace }}"
+      register: deploy_status
+      until: deploy_status.resources[0].status.readyReplicas | default(0) >= 1
+      retries: 30
+      delay: 10
+
+    - name: Show connection info
+      ansible.builtin.debug:
+        msg:
+          - "PostgreSQL deployed in {{ namespace }}"
+          - "Host: postgresql.{{ namespace }}.svc:5432"
+          - "Database: {{ db_name }}"
+          - "User: {{ db_user }}"
