@@ -1,5 +1,5 @@
 ---
-- name: Delete OpenShift Project
+- name: OpenShift プロジェクトの削除
   hosts: localhost
   connection: local
   gather_facts: false
@@ -13,19 +13,19 @@
     db_password: "redhat123"
 
   tasks:
-    - name: Validate namespace variable
+    - name: 必須パラメータの確認
       ansible.builtin.fail:
         msg: "Variable 'namespace' is required. Use -e namespace=<name>"
       when: namespace == ""
 
-    - name: Delete OpenShift Project
+    - name: OpenShift プロジェクトの削除
       kubernetes.core.k8s:
         state: absent
         api_version: project.openshift.io/v1
         kind: Project
         name: "{{ namespace }}"
 
-    - name: Update deleted_at in DB
+    - name: 管理データベースに削除日時を記録
       kubernetes.core.k8s_exec:
         namespace: mgmt-db
         pod: "{{ lookup('kubernetes.core.k8s', kind='Pod', namespace='mgmt-db', label_selector='app=postgresql', resource_definition={'status':{'phase':'Running'}}).metadata.name }}"
@@ -33,6 +33,6 @@
           psql -U {{ db_user }} -d {{ db_name }} -c
           "UPDATE ns_list SET deleted_at = CURRENT_TIMESTAMP WHERE namespace_name = '{{ namespace }}' AND deleted_at IS NULL;"
 
-    - name: Show result
+    - name: 削除結果の表示
       ansible.builtin.debug:
         msg: "Project {{ namespace }} deleted and recorded in DB."

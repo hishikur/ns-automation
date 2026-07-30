@@ -1,5 +1,5 @@
 ---
-- name: Deploy PostgreSQL on OpenShift
+- name: PostgreSQL データベースのデプロイ
   hosts: localhost
   connection: local
   gather_facts: false
@@ -12,12 +12,12 @@
     db_storage: "1Gi"
 
   tasks:
-    - name: Validate namespace variable
+    - name: 必須パラメータの確認
       ansible.builtin.fail:
         msg: "Variable 'namespace' is required."
       when: namespace == ""
 
-    - name: Create PostgreSQL Secret
+    - name: DB認証情報のSecret作成
       kubernetes.core.k8s:
         state: present
         definition:
@@ -32,7 +32,7 @@
             POSTGRESQL_PASSWORD: "{{ db_password }}"
             POSTGRESQL_DATABASE: "{{ db_name }}"
 
-    - name: Create PVC for PostgreSQL
+    - name: データ永続化用ストレージの作成
       kubernetes.core.k8s:
         state: present
         definition:
@@ -48,7 +48,7 @@
               requests:
                 storage: "{{ db_storage }}"
 
-    - name: Create PostgreSQL Deployment
+    - name: PostgreSQL Podのデプロイ
       kubernetes.core.k8s:
         state: present
         definition:
@@ -110,7 +110,7 @@
                     persistentVolumeClaim:
                       claimName: postgresql-data
 
-    - name: Create PostgreSQL Service
+    - name: DB接続用Serviceの作成
       kubernetes.core.k8s:
         state: present
         definition:
@@ -127,7 +127,7 @@
                 targetPort: 5432
             type: ClusterIP
 
-    - name: Wait for PostgreSQL to be ready
+    - name: PostgreSQL起動完了の待機
       kubernetes.core.k8s_info:
         api_version: apps/v1
         kind: Deployment
@@ -138,7 +138,7 @@
       retries: 30
       delay: 10
 
-    - name: Show connection info
+    - name: DB接続情報の表示
       ansible.builtin.debug:
         msg:
           - "PostgreSQL deployed in {{ namespace }}"

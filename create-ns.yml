@@ -1,5 +1,5 @@
 ---
-- name: Create OpenShift Project with ResourceQuota and LimitRange
+- name: OpenShift プロジェクト作成（ResourceQuota・LimitRange 付き）
   hosts: localhost
   connection: local
   gather_facts: false
@@ -24,12 +24,12 @@
     db_password: "redhat123"
 
   tasks:
-    - name: Validate required variables
+    - name: 必須パラメータの確認
       ansible.builtin.fail:
         msg: "Variables 'namespace' and 'department' are required. Use -e namespace=<name> -e department=<dept>"
       when: namespace == "" or department == ""
 
-    - name: Create OpenShift Project
+    - name: OpenShift プロジェクトの作成
       kubernetes.core.k8s:
         state: present
         definition:
@@ -38,7 +38,7 @@
           metadata:
             name: "{{ namespace }}"
 
-    - name: Create ResourceQuota
+    - name: リソースクォータの設定
       kubernetes.core.k8s:
         state: present
         definition:
@@ -55,7 +55,7 @@
               limits.memory: "{{ quota_memory_limits }}"
               pods: "{{ quota_pods }}"
 
-    - name: Create LimitRange
+    - name: コンテナリソース制限の設定
       kubernetes.core.k8s:
         state: present
         definition:
@@ -74,7 +74,7 @@
                   cpu: "{{ limitrange_default_request_cpu }}"
                   memory: "{{ limitrange_default_request_memory }}"
 
-    - name: Verify resources
+    - name: リソースクォータの確認
       kubernetes.core.k8s_info:
         api_version: v1
         kind: ResourceQuota
@@ -82,7 +82,7 @@
         name: "{{ namespace }}-quota"
       register: quota_info
 
-    - name: Register namespace in DB
+    - name: 管理データベースへの登録
       kubernetes.core.k8s_exec:
         namespace: mgmt-db
         pod: "{{ lookup('kubernetes.core.k8s', kind='Pod', namespace='mgmt-db', label_selector='app=postgresql', resource_definition={'status':{'phase':'Running'}}).metadata.name }}"
@@ -99,6 +99,6 @@
              storage = EXCLUDED.storage,
              deleted_at = NULL;"
 
-    - name: Show result
+    - name: 作成結果の表示
       ansible.builtin.debug:
         msg: "Created {{ namespace }} (dept: {{ department }}) with quota: CPU {{ quota_cpu_requests }}/{{ quota_cpu_limits }}, Memory {{ quota_memory_requests }}/{{ quota_memory_limits }}, Pods {{ quota_pods }}"
