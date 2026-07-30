@@ -6,21 +6,28 @@
 
   vars:
     namespace: ""
+    department: ""
     quota_cpu_requests: "4"
     quota_cpu_limits: "8"
     quota_memory_requests: "4Gi"
     quota_memory_limits: "8Gi"
     quota_pods: "20"
+    quota_storage: "10Gi"
     limitrange_default_cpu: "500m"
     limitrange_default_memory: "512Mi"
     limitrange_default_request_cpu: "100m"
     limitrange_default_request_memory: "256Mi"
+    db_host: "postgresql.mgmt-db.svc"
+    db_port: "5432"
+    db_name: "sampledb"
+    db_user: "dbadmin"
+    db_password: "redhat123"
 
   tasks:
-    - name: Validate namespace variable
+    - name: Validate required variables
       ansible.builtin.fail:
-        msg: "Variable 'namespace' is required. Use -e namespace=<name>"
-      when: namespace == ""
+        msg: "Variables 'namespace' and 'department' are required. Use -e namespace=<name> -e department=<dept>"
+      when: namespace == "" or department == ""
 
     - name: Create OpenShift Project
       kubernetes.core.k8s:
@@ -75,6 +82,23 @@
         name: "{{ namespace }}-quota"
       register: quota_info
 
-    - name: Show quota
+    - name: Register namespace in DB
+      kubernetes.core.k8s_exec:
+        namespace: mgmt-db
+        pod: "{{ lookup('kubernetes.core.k8s', kind='Pod', namespace='mgmt-db', label_selector='app=postgresql', resource_definition={'status':{'phase':'Running'}}).metadata.name }}"
+        command: >
+          psql -U {{ db_user }} -d {{ db_name }} -c
+          "INSERT INTO ns_list (department, namespace_name, cpu_requests, cpu_limits, memory_requests, memory_limits, storage)
+           VALUES ('{{ department }}', '{{ namespace }}', '{{ quota_cpu_requests }}', '{{ quota_cpu_limits }}', '{{ quota_memory_requests }}', '{{ quota_memory_limits }}', '{{ quota_storage }}')
+           ON CONFLICT (namespace_name) DO UPDATE SET
+             department = EXCLUDED.department,
+             cpu_requests = EXCLUDED.cpu_requests,
+             cpu_limits = EXCLUDED.cpu_limits,
+             memory_requests = EXCLUDED.memory_requests,
+             memory_limits = EXCLUDED.memory_limits,
+             storage = EXCLUDED.storage,
+             deleted_at = NULL;"
+
+    - name: Show result
       ansible.builtin.debug:
-        msg: "Created {{ namespace }} with quota: CPU {{ quota_cpu_requests }}/{{ quota_cpu_limits }}, Memory {{ quota_memory_requests }}/{{ quota_memory_limits }}, Pods {{ quota_pods }}"
+        msg: "Created {{ namespace }} (dept: {{ department }}) with quota: CPU {{ quota_cpu_requests }}/{{ quota_cpu_limits }}, Memory {{ quota_memory_requests }}/{{ quota_memory_limits }}, Pods {{ quota_pods }}"

@@ -6,6 +6,11 @@
 
   vars:
     namespace: ""
+    db_host: "postgresql.mgmt-db.svc"
+    db_port: "5432"
+    db_name: "sampledb"
+    db_user: "dbadmin"
+    db_password: "redhat123"
 
   tasks:
     - name: Validate namespace variable
@@ -20,6 +25,14 @@
         kind: Project
         name: "{{ namespace }}"
 
+    - name: Update deleted_at in DB
+      kubernetes.core.k8s_exec:
+        namespace: mgmt-db
+        pod: "{{ lookup('kubernetes.core.k8s', kind='Pod', namespace='mgmt-db', label_selector='app=postgresql', resource_definition={'status':{'phase':'Running'}}).metadata.name }}"
+        command: >
+          psql -U {{ db_user }} -d {{ db_name }} -c
+          "UPDATE ns_list SET deleted_at = CURRENT_TIMESTAMP WHERE namespace_name = '{{ namespace }}' AND deleted_at IS NULL;"
+
     - name: Show result
       ansible.builtin.debug:
-        msg: "Project {{ namespace }} deleted."
+        msg: "Project {{ namespace }} deleted and recorded in DB."
