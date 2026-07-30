@@ -1,0 +1,43 @@
+---
+- name: Namespace管理テーブルの一覧表示
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    db_user: "dbadmin"
+    db_name: "sampledb"
+    show_deleted: "no"
+
+  tasks:
+    - name: PostgreSQL Podの特定
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: mgmt-db
+        label_selectors:
+          - app=postgresql
+        field_selectors:
+          - status.phase=Running
+      register: pg_pods
+
+    - name: Namespace一覧の取得
+      kubernetes.core.k8s_exec:
+        namespace: mgmt-db
+        pod: "{{ pg_pods.resources[0].metadata.name }}"
+        command: >
+          psql -U {{ db_user }} -d {{ db_name }} --no-align -t -c
+          "SELECT id, department, namespace_name, cpu_requests, cpu_limits,
+                  memory_requests, memory_limits, storage,
+                  to_char(created_at, 'YYYY-MM-DD HH24:MI') as created,
+                  COALESCE(to_char(deleted_at, 'YYYY-MM-DD HH24:MI'), '-') as deleted
+           FROM ns_list
+           {% if show_deleted == 'no' %}WHERE deleted_at IS NULL{% endif %}
+           ORDER BY id;"
+      register: query_result
+
+    - name: 一覧の表示
+      ansible.builtin.debug:
+        msg: "{{ ['ID | 部署 | Namespace | CPU(req/lim) | Mem(req/lim) | Storage | 作成日時 | 削除日時', '---|------|-----------|-------------|-------------|---------|----------|--------'] + formatted }}"
+      vars:
+        formatted: "{{ query_result.stdout_lines | default([]) | map('regex_replace', '\\|', ' | ') | list }}"
