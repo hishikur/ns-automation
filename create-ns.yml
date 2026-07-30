@@ -37,6 +37,10 @@
           kind: Project
           metadata:
             name: "{{ namespace }}"
+            labels:
+              managed-by: fordemo
+            annotations:
+              department: "{{ department }}"
 
     - name: リソースクォータの設定
       kubernetes.core.k8s:
