@@ -1,0 +1,80 @@
+---
+- name: Create OpenShift Project with ResourceQuota and LimitRange
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    namespace: ""
+    quota_cpu_requests: "4"
+    quota_cpu_limits: "8"
+    quota_memory_requests: "4Gi"
+    quota_memory_limits: "8Gi"
+    quota_pods: "20"
+    limitrange_default_cpu: "500m"
+    limitrange_default_memory: "512Mi"
+    limitrange_default_request_cpu: "100m"
+    limitrange_default_request_memory: "256Mi"
+
+  tasks:
+    - name: Validate namespace variable
+      ansible.builtin.fail:
+        msg: "Variable 'namespace' is required. Use -e namespace=<name>"
+      when: namespace == ""
+
+    - name: Create OpenShift Project
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: project.openshift.io/v1
+          kind: Project
+          metadata:
+            name: "{{ namespace }}"
+
+    - name: Create ResourceQuota
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: "{{ namespace }}-quota"
+            namespace: "{{ namespace }}"
+          spec:
+            hard:
+              requests.cpu: "{{ quota_cpu_requests }}"
+              limits.cpu: "{{ quota_cpu_limits }}"
+              requests.memory: "{{ quota_memory_requests }}"
+              limits.memory: "{{ quota_memory_limits }}"
+              pods: "{{ quota_pods }}"
+
+    - name: Create LimitRange
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: LimitRange
+          metadata:
+            name: "{{ namespace }}-limitrange"
+            namespace: "{{ namespace }}"
+          spec:
+            limits:
+              - type: Container
+                default:
+                  cpu: "{{ limitrange_default_cpu }}"
+                  memory: "{{ limitrange_default_memory }}"
+                defaultRequest:
+                  cpu: "{{ limitrange_default_request_cpu }}"
+                  memory: "{{ limitrange_default_request_memory }}"
+
+    - name: Verify resources
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ResourceQuota
+        namespace: "{{ namespace }}"
+        name: "{{ namespace }}-quota"
+      register: quota_info
+
+    - name: Show quota
+      ansible.builtin.debug:
+        msg: "Created {{ namespace }} with quota: CPU {{ quota_cpu_requests }}/{{ quota_cpu_limits }}, Memory {{ quota_memory_requests }}/{{ quota_memory_limits }}, Pods {{ quota_pods }}"

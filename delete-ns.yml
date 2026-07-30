@@ -1,0 +1,25 @@
+---
+- name: Delete OpenShift Project
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    namespace: ""
+
+  tasks:
+    - name: Validate namespace variable
+      ansible.builtin.fail:
+        msg: "Variable 'namespace' is required. Use -e namespace=<name>"
+      when: namespace == ""
+
+    - name: Delete OpenShift Project
+      kubernetes.core.k8s:
+        state: absent
+        api_version: project.openshift.io/v1
+        kind: Project
+        name: "{{ namespace }}"
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "Project {{ namespace }} deleted."
