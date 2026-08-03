@@ -107,13 +107,15 @@
     #  表3: DB vs SNO 差分サマリ
     # ==========================================
 
-    - name: DB の稼働中 Namespace 一覧を取得
+    - name: DB の Namespace 一覧を取得
       kubernetes.core.k8s_exec:
         namespace: mgmt-db
         pod: "{{ pg_pods.resources[0].metadata.name }}"
         command: >
           psql -U {{ db_user }} -d {{ db_name }} --no-align -t -c
-          "SELECT namespace_name FROM ns_list WHERE deleted_at IS NULL ORDER BY namespace_name;"
+          "SELECT namespace_name FROM ns_list
+           {% if show_deleted == 'no' %}WHERE deleted_at IS NULL{% endif %}
+           ORDER BY namespace_name;"
       register: db_ns_result
 
     - name: DB vs SNO の差分を算出
