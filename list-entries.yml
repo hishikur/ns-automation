@@ -1,5 +1,5 @@
 ---
-- name: Namespace管理テーブルの一覧表示
+- name: Namespace管理テーブルの一覧表示と実機比較
   hosts: localhost
   connection: local
   gather_facts: false
@@ -10,6 +10,10 @@
     show_deleted: "no"
 
   tasks:
+    # ==========================================
+    #  表1: DB テーブル (ns_list) の一覧
+    # ==========================================
+
     - name: PostgreSQL Podの特定
       kubernetes.core.k8s_info:
         api_version: v1
@@ -36,8 +40,98 @@
            ORDER BY id;"
       register: query_result
 
-    - name: 一覧の表示
+    - name: "[表1] DB テーブル一覧"
       ansible.builtin.debug:
-        msg: "{{ ['ID | 部署 | Namespace | CPU(req/lim) | Mem(req/lim) | Storage | 作成日時 | 削除日時', '---|------|-----------|-------------|-------------|---------|----------|--------'] + formatted }}"
+        msg: "{{ header + formatted }}"
       vars:
+        header:
+          - "ID | 部署 | Namespace | CPU Req | CPU Lim | Mem Req | Mem Lim | Storage | 作成日時 | 削除日時"
+          - "---|------|-----------|---------|---------|---------|---------|---------|----------|--------"
         formatted: "{{ query_result.stdout_lines | default([]) | map('regex_replace', '\\|', ' | ') | list }}"
+
+    # ==========================================
+    #  表2: SNO 実機情報 (managed-by=fordemo)
+    # ==========================================
+
+    - name: managed-by=fordemo の Namespace 一覧を取得
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        label_selectors:
+          - managed-by=fordemo
+      register: sno_namespaces
+
+    - name: 各 Namespace の ResourceQuota を取得
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ResourceQuota
+        namespace: "{{ item.metadata.name }}"
+      loop: "{{ sno_namespaces.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      register: sno_quotas
+
+    - name: SNO 実機情報の整形
+      ansible.builtin.set_fact:
+        sno_rows: "{{ sno_rows | default([]) + [row] }}"
+        sno_ns_list: "{{ sno_ns_list | default([]) + [ns_name] }}"
+      vars:
+        ns_name: "{{ item.item.metadata.name }}"
+        dept: "{{ item.item.metadata.labels.department | default('N/A') }}"
+        quota: "{{ item.resources[0].spec.hard | default({}) }}"
+        cpu_req: "{{ quota['requests.cpu'] | default('-') }}"
+        cpu_lim: "{{ quota['limits.cpu'] | default('-') }}"
+        mem_req: "{{ quota['requests.memory'] | default('-') }}"
+        mem_lim: "{{ quota['limits.memory'] | default('-') }}"
+        pods: "{{ quota['pods'] | default('-') }}"
+        row: "{{ dept }} | {{ ns_name }} | {{ cpu_req }} | {{ cpu_lim }} | {{ mem_req }} | {{ mem_lim }} | {{ pods }}"
+      loop: "{{ sno_quotas.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.metadata.name }}"
+
+    - name: "[表2] SNO 実機 Namespace 一覧"
+      ansible.builtin.debug:
+        msg: "{{ header + sno_rows }}"
+      vars:
+        header:
+          - "部署 | Namespace | CPU Req | CPU Lim | Mem Req | Mem Lim | Pods"
+          - "-----|-----------|---------|---------|---------|---------|-----"
+      when: sno_rows is defined and sno_rows | length > 0
+
+    - name: "[表2] SNO に managed-by=fordemo の Namespace なし"
+      ansible.builtin.debug:
+        msg: "managed-by=fordemo ラベルの Namespace は SNO 上に存在しません。"
+      when: sno_namespaces.resources | length == 0
+
+    # ==========================================
+    #  表3: DB vs SNO 差分サマリ
+    # ==========================================
+
+    - name: DB の稼働中 Namespace 一覧を取得
+      kubernetes.core.k8s_exec:
+        namespace: mgmt-db
+        pod: "{{ pg_pods.resources[0].metadata.name }}"
+        command: >
+          psql -U {{ db_user }} -d {{ db_name }} --no-align -t -c
+          "SELECT namespace_name FROM ns_list WHERE deleted_at IS NULL ORDER BY namespace_name;"
+      register: db_ns_result
+
+    - name: DB vs SNO の差分を算出
+      ansible.builtin.set_fact:
+        db_ns_set: "{{ db_ns_result.stdout_lines | default([]) | map('trim') | select | list }}"
+        sno_ns_set: "{{ sno_ns_list | default([]) }}"
+
+    - name: "[表3] DB vs SNO 差分サマリ"
+      ansible.builtin.debug:
+        msg: "{{ header + db_only_rows + sno_only_rows + match_rows + ['', summary] }}"
+      vars:
+        header:
+          - "Namespace | 状態"
+          - "----------|------"
+        db_only: "{{ db_ns_set | difference(sno_ns_set) }}"
+        sno_only: "{{ sno_ns_set | difference(db_ns_set) }}"
+        matched: "{{ db_ns_set | intersect(sno_ns_set) }}"
+        db_only_rows: "{{ db_only | map('regex_replace', '^(.*)$', '\\1 | DB のみ（SNO に未作成 or 削除済み）') | list }}"
+        sno_only_rows: "{{ sno_only | map('regex_replace', '^(.*)$', '\\1 | SNO のみ（DB 未登録）') | list }}"
+        match_rows: "{{ matched | map('regex_replace', '^(.*)$', '\\1 | 一致') | list }}"
+        summary: "一致: {{ matched | length }}件 / DB のみ: {{ db_only | length }}件 / SNO のみ: {{ sno_only | length }}件"
