@@ -31,10 +31,11 @@
         pod: "{{ pg_pods.resources[0].metadata.name }}"
         command: >
           psql -U {{ db_user }} -d {{ db_name }} --no-align -t -c
-          "SELECT id, department, namespace_name, cpu_requests, cpu_limits,
-                  memory_requests, memory_limits, storage,
-                  to_char(created_at, 'YYYY-MM-DD HH24:MI') as created,
-                  COALESCE(to_char(deleted_at, 'YYYY-MM-DD HH24:MI'), '-') as deleted
+          "SELECT format('%-4s | %-20s | %-15s | %-7s | %-7s | %-7s | %-7s | %-7s | %-16s | %-16s',
+                   id::text, department, namespace_name, cpu_requests, cpu_limits,
+                   memory_requests, memory_limits, storage,
+                   to_char(created_at, 'YYYY-MM-DD HH24:MI'),
+                   COALESCE(to_char(deleted_at, 'YYYY-MM-DD HH24:MI'), '-'))
            FROM ns_list
            {% if show_deleted == 'no' %}WHERE deleted_at IS NULL{% endif %}
            ORDER BY id;"
@@ -42,12 +43,11 @@
 
     - name: "[表1] DB テーブル一覧"
       ansible.builtin.debug:
-        msg: "{{ header + formatted }}"
+        msg: "{{ header + (query_result.stdout_lines | default([])) }}"
       vars:
         header:
-          - "ID | 部署 | Namespace | CPU Req | CPU Lim | Mem Req | Mem Lim | Storage | 作成日時 | 削除日時"
-          - "---|------|-----------|---------|---------|---------|---------|---------|----------|--------"
-        formatted: "{{ query_result.stdout_lines | default([]) | map('regex_replace', '\\|', ' | ') | list }}"
+          - "{{ '%-4s | %-20s | %-15s | %-7s | %-7s | %-7s | %-7s | %-7s | %-16s | %-16s' | format('ID', '部署', 'Namespace', 'CPU Req', 'CPU Lim', 'Mem Req', 'Mem Lim', 'Storage', '作成日時', '削除日時') }}"
+          - "{{ '%-4s-+-%-20s-+-%-15s-+-%-7s-+-%-7s-+-%-7s-+-%-7s-+-%-7s-+-%-16s-+-%-16s' | format('----', '--------------------', '---------------', '-------', '-------', '-------', '-------', '-------', '----------------', '----------------') }}"
 
     # ==========================================
     #  表2: SNO 実機情報 (managed-by=fordemo)
@@ -84,7 +84,7 @@
         mem_req: "{{ quota['requests.memory'] | default('-') }}"
         mem_lim: "{{ quota['limits.memory'] | default('-') }}"
         pods: "{{ quota['pods'] | default('-') }}"
-        row: "{{ dept }} | {{ ns_name }} | {{ cpu_req }} | {{ cpu_lim }} | {{ mem_req }} | {{ mem_lim }} | {{ pods }}"
+        row: "{{ '%-20s | %-15s | %-7s | %-7s | %-7s | %-7s | %-5s' | format(dept, ns_name, cpu_req, cpu_lim, mem_req, mem_lim, pods) }}"
       loop: "{{ sno_quotas.results | default([]) }}"
       loop_control:
         label: "{{ item.item.metadata.name }}"
@@ -94,8 +94,8 @@
         msg: "{{ header + sno_rows }}"
       vars:
         header:
-          - "部署 | Namespace | CPU Req | CPU Lim | Mem Req | Mem Lim | Pods"
-          - "-----|-----------|---------|---------|---------|---------|-----"
+          - "{{ '%-20s | %-15s | %-7s | %-7s | %-7s | %-7s | %-5s' | format('部署', 'Namespace', 'CPU Req', 'CPU Lim', 'Mem Req', 'Mem Lim', 'Pods') }}"
+          - "{{ '%-20s-+-%-15s-+-%-7s-+-%-7s-+-%-7s-+-%-7s-+-%-5s' | format('--------------------', '---------------', '-------', '-------', '-------', '-------', '-----') }}"
       when: sno_rows is defined and sno_rows | length > 0
 
     - name: "[表2] SNO に managed-by=fordemo の Namespace なし"
@@ -121,17 +121,35 @@
         db_ns_set: "{{ db_ns_result.stdout_lines | default([]) | map('trim') | select | list }}"
         sno_ns_set: "{{ sno_ns_list | default([]) }}"
 
+    - name: 差分行の構築 (DB のみ)
+      ansible.builtin.set_fact:
+        diff_rows: "{{ diff_rows | default([]) + [row] }}"
+      vars:
+        row: "{{ '%-20s | %s' | format(item, 'DB のみ（SNO に未作成 or 削除済み）') }}"
+      loop: "{{ db_ns_set | difference(sno_ns_set) }}"
+
+    - name: 差分行の構築 (SNO のみ)
+      ansible.builtin.set_fact:
+        diff_rows: "{{ diff_rows | default([]) + [row] }}"
+      vars:
+        row: "{{ '%-20s | %s' | format(item, 'SNO のみ（DB 未登録）') }}"
+      loop: "{{ sno_ns_set | difference(db_ns_set) }}"
+
+    - name: 差分行の構築 (一致)
+      ansible.builtin.set_fact:
+        diff_rows: "{{ diff_rows | default([]) + [row] }}"
+      vars:
+        row: "{{ '%-20s | %s' | format(item, '一致') }}"
+      loop: "{{ db_ns_set | intersect(sno_ns_set) }}"
+
     - name: "[表3] DB vs SNO 差分サマリ"
       ansible.builtin.debug:
-        msg: "{{ header + db_only_rows + sno_only_rows + match_rows + ['', summary] }}"
+        msg: "{{ header + (diff_rows | default([])) + ['', summary] }}"
       vars:
         header:
-          - "Namespace | 状態"
-          - "----------|------"
+          - "{{ '%-20s | %s' | format('Namespace', '状態') }}"
+          - "{{ '%-20s-+-%-s' | format('--------------------', '------------------------------------') }}"
         db_only: "{{ db_ns_set | difference(sno_ns_set) }}"
         sno_only: "{{ sno_ns_set | difference(db_ns_set) }}"
         matched: "{{ db_ns_set | intersect(sno_ns_set) }}"
-        db_only_rows: "{{ db_only | map('regex_replace', '^(.*)$', '\\1 | DB のみ（SNO に未作成 or 削除済み）') | list }}"
-        sno_only_rows: "{{ sno_only | map('regex_replace', '^(.*)$', '\\1 | SNO のみ（DB 未登録）') | list }}"
-        match_rows: "{{ matched | map('regex_replace', '^(.*)$', '\\1 | 一致') | list }}"
         summary: "一致: {{ matched | length }}件 / DB のみ: {{ db_only | length }}件 / SNO のみ: {{ sno_only | length }}件"
